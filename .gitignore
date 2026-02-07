@@ -1,0 +1,19 @@
+# Rust
+/target
+Cargo.lock
+
+# WASM build output
+/pkg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Test outputs
+*.log
