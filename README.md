@@ -38,13 +38,38 @@ Build a Rust WASM generator that matches faf-cli v4.2.1 output exactly.
 
 ## Build
 
+### Quick Build (if rustup is properly configured)
+
 ```bash
 wasm-pack build --target web --release
 ```
 
+### Alternative Build (rustup + Homebrew Rust conflict workaround)
+
+If you have both rustup and Homebrew Rust installed on macOS:
+
+```bash
+# Build WASM binary
+RUSTC=~/.rustup/toolchains/stable-x86_64-apple-darwin/bin/rustc \
+  ~/.rustup/toolchains/stable-x86_64-apple-darwin/bin/cargo \
+  build --target wasm32-unknown-unknown --release
+
+# Generate JS glue code (requires wasm-bindgen-cli)
+cargo install wasm-bindgen-cli
+wasm-bindgen target/wasm32-unknown-unknown/release/faf_generator_wasm.wasm \
+  --out-dir pkg --target web
+```
+
 **Output:**
-- `pkg/faf_generator_wasm_bg.wasm` (WASM binary)
+- `pkg/faf_generator_wasm_bg.wasm` (WASM binary ~1.2MB)
 - `pkg/faf_generator_wasm.js` (JS glue code)
+
+**Optimization:**
+```bash
+# Optional: Optimize WASM size with wasm-opt
+wasm-opt -Os pkg/faf_generator_wasm_bg.wasm -o pkg/faf_generator_wasm_bg.wasm
+# Target: ~200-250KB after optimization
+```
 
 ---
 
@@ -91,9 +116,11 @@ cargo test
 
 ## Status
 
-**Current:** Spec ready, awaiting implementation
-**Owner:** To be implemented
-**Timeline:** TBD
+**Implementation:** Complete ✅ (730 lines Rust)
+**Tests:** 4/4 passing ✅
+**WASM Build:** Working ✅ (1.2MB unoptimized, targets ~200-250KB optimized)
+**Owner:** wolfejam
+**Date:** 2026-02-07
 
 ---
 
