@@ -1,11 +1,11 @@
 [package]
-name = "faf-generator-wasm"
-version = "1.0.0"
+name = "faf-wasm-gen"
+version = "2.0.0"
 authors = ["wolfejam <wolfejam.dev>"]
 edition = "2021"
-description = "Rust WASM generator for FAF (Foundational AI-context Format)"
+description = "FAF .faf generator — Rust→WASM. faf-cli v6.8 / faf_version 3.3, 33-slot Mk4. The generate sibling of faf-wasm-sdk."
 license = "MIT"
-repository = "https://github.com/Wolfe-Jam/faf-generator-wasm"
+repository = "https://github.com/Wolfe-Jam/faf-wasm-gen"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

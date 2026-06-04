@@ -1,108 +1,49 @@
 faf_version: 2.5.0
-generated: 2026-02-07T22:49:15.694Z
-ai_scoring_system: 2025-09-20
-ai_score: 36%
-ai_confidence: LOW
-ai_value: 30_seconds_replaces_20_minutes_of_questions
-ai_tldr:
-  project: faf-generator-wasm - Built with 🦀 Rust + WASM for the edge*
-  stack: Rust
-  quality_bar: ZERO_ERRORS_F1_STANDARDS
-  current_focus: Production deployment preparation
-  your_role: Build features with perfect context
-instant_context:
-  what_building: Built with 🦀 Rust + WASM for the edge*
-  tech_stack: Rust
-  main_language: Rust
-  key_files:
-    - Cargo.toml
-    - src/main.rs
-context_quality:
-  slots_filled: 8/21 (38%)
-  ai_confidence: LOW
-  handoff_ready: false
-  missing_context:
-    - CI/CD pipeline
-    - Database
 project:
-  name: faf-generator-wasm
-  goal: Built with 🦀 Rust + WASM for the edge*
+  name: faf-wasm-gen
+  goal: Generate `project.faf` files in the browser or at the edge.
   main_language: Rust
-  type: rust
-  mission: 🚀 Make Your AI Happy! 🧡 Trust-Driven 🤖
-  revolution: 30 seconds replaces 20 minutes of questions
-  brand: F1-Inspired Software Engineering - Championship AI Context
-ai_instructions:
-  priority_order:
-    - 1. Read THIS .faf file first
-    - 2. Check CLAUDE.md for session context
-    - 3. Review package.json for dependencies
-  working_style:
-    code_first: true
-    explanations: minimal
-    quality_bar: zero_errors
-    testing: required
-  warnings:
-    - Never modify dial components without approval
-    - All TypeScript must pass strict mode
-    - Test coverage required for new features
+  type: wasm
 stack:
-  package_manager: Cargo
-preferences:
-  quality_bar: zero_errors
-  commit_style: conventional_emoji
-  response_style: concise_code_first
-  explanation_level: minimal
-  communication: direct
-  testing: required
-  documentation: as_needed
-state:
-  phase: development
-  version: 1.0.0
-  focus: production_deployment
-  status: green_flag
-  next_milestone: npm_publication
-  blockers: null
-scores:
-  faf_score: 36
-  slot_based_percentage: 38
-  total_slots: 21
-  scoring_philosophy: F1-Inspired Championship Scoring
-tags:
-  auto_generated:
-    - faf-generator-wasm
-    - rust
-  smart_defaults:
-    - .faf
-    - ai-ready
-    - "2026"
-    - software
-    - open-source
-  user_defined: null
+  frontend: slotignored
+  css_framework: slotignored
+  ui_library: slotignored
+  state_management: slotignored
+  backend: slotignored
+  api_type: slotignored
+  runtime: slotignored
+  database: slotignored
+  connection: slotignored
+  hosting: ""
+  build: cargo
+  cicd: ""
+  monorepo_tool: slotignored
+  package_manager: slotignored
+  workspaces: slotignored
+  admin: slotignored
+  cache: slotignored
+  search: slotignored
+  storage: slotignored
 human_context:
-  who: "| Target | Platform | Purpose |"
-  what: Built with 🦀 Rust + WASM for the edge*
-  why: Build a Rust WASM generator that matches faf-cli v4
-  when: Timeline:** TBD
-  additional_context: null
-  context_score: 0
-  total_prd_score: 36
-  success_rate: 50%
-ai_scoring_details:
-  system_date: 2025-09-20
-  slot_based_percentage: 38
-  ai_score: 36
-  total_slots: 21
-  filled_slots: 8
-  scoring_method: Honest percentage - no fake minimums
-  trust_embedded: COUNT ONCE architecture - trust MY embedded scores
-gemini:
-  cli_detected: true
-  context_bridge: true
-  agents_manifest: true
-  notes: Native Gemini CLI integration via FAF
-faf_dna:
-  birth_dna: 38
-  birth_certificate: FAF-2026-FAFGENER-Q2CD
-  birth_date: 2026-02-07T22:49:15.851Z
-  current_score: 38
+  who: wolfejam
+  what: Rust WASM Generator for FAF (Foundational AI-context Format)
+  why: Build a Rust WASM generator that matches faf-cli v6.8 output exactly (faf_version "3.3", 33-slot Mk4 model).
+  where: crates.io, npm, edge (builder.faf.one)
+  when: 2026-06 — ported to faf-cli v6.8 parity
+  how: Rust to WASM; the generate sibling of faf-wasm-sdk
+monorepo:
+  packages_count: slotignored
+  build_orchestrator: slotignored
+  versioning_strategy: slotignored
+  shared_configs: slotignored
+  remote_cache: slotignored
+tech_stack:
+  - Rust
+key_files:
+  - Cargo.toml
+  - src/lib.rs
+  - README.md
+commands:
+  build: cargo build --release
+  test: cargo test
+  lint: cargo clippy

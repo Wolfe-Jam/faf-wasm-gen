@@ -1,4 +1,4 @@
-# faf-generator-wasm
+# faf-wasm-gen
 
 **Rust WASM Generator for FAF (Foundational AI-context Format)**
 
@@ -8,11 +8,11 @@ Generate `project.faf` files in the browser or at the edge.
 
 ## Mission
 
-Build a Rust WASM generator that matches faf-cli v4.2.1 output exactly.
+Build a Rust WASM generator that matches faf-cli v6.8 output exactly (faf_version `"3.3"`, 33-slot Mk4 model).
 
 **Spec:** See `SPEC.md` for complete implementation specification.
 
-**Bible:** `/Users/wolfejam/FAF/cli` (faf-cli v4.2.1)
+**Bible:** `/Users/wolfejam/FAF/cli` (faf-cli v6.8) — `src/core/slots.ts`
 
 ---
 
@@ -56,13 +56,13 @@ RUSTC=~/.rustup/toolchains/stable-x86_64-apple-darwin/bin/rustc \
 
 # Generate JS glue code (requires wasm-bindgen-cli)
 cargo install wasm-bindgen-cli
-wasm-bindgen target/wasm32-unknown-unknown/release/faf_generator_wasm.wasm \
+wasm-bindgen target/wasm32-unknown-unknown/release/faf_wasm_gen.wasm \
   --out-dir pkg --target web
 ```
 
 **Output:**
-- `pkg/faf_generator_wasm_bg.wasm` (WASM binary ~1.2MB)
-- `pkg/faf_generator_wasm.js` (JS glue code)
+- `pkg/faf_wasm_gen_bg.wasm` (WASM binary ~1.2MB)
+- `pkg/faf_wasm_gen.js` (JS glue code)
 
 **Optimization:**
 
@@ -76,8 +76,8 @@ wasm-opt -Oz \
   --enable-sign-ext \
   --converge \
   --strip-debug --strip-dwarf --strip-producers \
-  target/wasm32-unknown-unknown/release/faf_generator_wasm.wasm \
-  -o pkg/faf_generator_wasm_bg.wasm
+  target/wasm32-unknown-unknown/release/faf_wasm_gen.wasm \
+  -o pkg/faf_wasm_gen_bg.wasm
 ```
 
 **Size Breakdown:**
@@ -117,7 +117,7 @@ cargo test
 ```
 
 **Test repos:**
-- grok-1 (Python/JAX, ml-research type)
+- grok-1 (Python/JAX, data-science type)
 - test-faf-demo (JavaScript/React)
 - faf-cli (TypeScript CLI)
 
@@ -125,11 +125,11 @@ cargo test
 
 ## Success Criteria
 
-✅ Generates identical .faf to faf-cli for same inputs
-✅ Supports ml-research type (NEW - critical for Grok-1)
-✅ Omits undetected fields (no "Unknown" hardcoding)
-✅ Scores identically to faf-cli
-✅ Passes WJTTC test suite
+✅ Generates current faf_version "3.3" / 33-slot Mk4 .faf
+✅ Canonical app types (data-science, frontend, mcp, library, …)
+✅ `slotignored` for slots outside the type's active categories
+✅ Round-trips through faf-cli's scorer (mcp 17 / frontend 16 / library 12 active slots)
+✅ No "Unknown" hardcoding; score computed on read (not stored)
 
 ---
 

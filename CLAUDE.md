@@ -1,30 +1,26 @@
-# 🏎️ CLAUDE.md - faf-generator-wasm Persistent Context & Intelligence
+<!-- faf: faf-wasm-gen | Rust | wasm | Generate `project.faf` files in the browser or at the edge. -->
+<!-- faf: claim=project.faf | family=FAF -->
 
-## PROJECT STATE: GOOD 🚀
-**Current Position:** Built with 🦀 Rust + WASM for the edge*
-**Tyre Compound:** ULTRASOFT C5 (Maximum Performance)
+# CLAUDE.md — faf-wasm-gen
+
+## What This Is
+
+Generate `project.faf` files in the browser or at the edge.
+
+## Stack
+
+- **Language:** Rust
+- **Build:** cargo
+
+## Context
+
+- **Who:** wolfejam
+- **What:** Rust WASM Generator for FAF (Foundational AI-context Format)
+- **Why:** Build a Rust WASM generator that matches faf-cli v6.8 output exactly (faf_version "3.3", 33-slot Mk4 model).
+- **Where:** crates.io, npm, edge (builder.faf.one)
+- **When:** 2026-06 — ported to faf-cli v6.8 parity
+- **How:** Rust to WASM; the generate sibling of faf-wasm-sdk
 
 ---
 
-## 🎨 CORE CONTEXT
-
-### Project Identity
-- **Name:** faf-generator-wasm
-- **Stack:** Rust
-- **Quality:** F1-INSPIRED (Championship Performance)
-
-### Technical Architecture
-- **What Building:** Built with 🦀 Rust + WASM for the edge*
-- **Main Language:** Rust
-
-### 📊 Context Quality Status
-- **Overall Assessment:** Good
-- **Last Updated:** 2026-02-07
-
----
-
-**STATUS: BI-SYNC ACTIVE 🔗 - Synchronized with .faf context!**
-
-*Last Sync: 2026-02-07T22:49:45.332Z*
-*Sync Engine: F1-Inspired Software Engineering*
-*🏎️⚡️_championship_sync*
+*STATUS: BI-SYNC ACTIVE — 2026-06-03T23:43:35.280Z*

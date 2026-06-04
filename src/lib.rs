@@ -1,77 +1,98 @@
 /*!
- * faf-generator-wasm
+ * faf-wasm-gen
  *
  * Rust WASM Generator for FAF (Foundational AI-context Format)
  *
- * SPEC: See ../SPEC.md for complete implementation requirements
- * BIBLE: /Users/wolfejam/FAF/cli (faf-cli v4.2.1)
+ * SPEC: faf-cli v6.8 — faf_version "3.3", 33-slot Mk4 model
+ * BIBLE: /Users/wolfejam/FAF/cli (faf-cli) — src/core/slots.ts
  *
- * MISSION: Generate project.faf that matches faf-cli output exactly
+ * MISSION: Generate project.faf matching faf-cli v6.8 output:
+ *   - faf_version "3.3"
+ *   - 33 Mk4 canonical slots (21 base + 12 enterprise), `slotignored` for
+ *     slots outside the detected app-type's active categories
+ *   - Lean section set (project / instant_context / stack / human_context /
+ *     tags / state / metadata / monorepo). NO embedded score — faf-cli
+ *     computes score = populated/active on READ (score is not stored).
+ *
+ * Ported 2026-06-03 from the obsolete v4.2.1 / faf_version 2.5.0 generator.
  */
 
 use wasm_bindgen::prelude::*;
 use serde_json::Value;
 use chrono::Utc;
 use regex::Regex;
+use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-enum ProjectType {
-    WebApp,
-    BackendApi,
-    Cli,
-    Library,
-    MlModel,      // Aliases: ml-research
-    DataAnalysis,
-    FullStack,
-    Extension,
-    Mobile,
-    Desktop,
-    Game,
+/// Mk4 slot categories (see slots.ts).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Cat {
+    Project,
+    Human,
+    Frontend,
+    Backend,
+    Universal,
+    EntInfra,
+    EntApp,
+    EntOps,
 }
 
-impl ProjectType {
-    fn as_str(&self) -> &str {
-        match self {
-            ProjectType::WebApp => "web-app",
-            ProjectType::BackendApi => "backend-api",
-            ProjectType::Cli => "cli",
-            ProjectType::Library => "library",
-            ProjectType::MlModel => "ml-research",
-            ProjectType::DataAnalysis => "data-analysis",
-            ProjectType::FullStack => "full-stack",
-            ProjectType::Extension => "extension",
-            ProjectType::Mobile => "mobile",
-            ProjectType::Desktop => "desktop",
-            ProjectType::Game => "game",
+/// app_type → active categories. Mirrors APP_TYPE_CATEGORIES in slots.ts.
+/// Slots whose category is NOT in this set render as `slotignored`.
+fn active_cats(app_type: &str) -> Vec<Cat> {
+    use Cat::*;
+    match app_type {
+        "documentation" | "encyclopedia" => vec![Project, Human],
+        "cli" | "library" | "sdk" | "wasm" | "html" => vec![Project, Human, Universal],
+        "frontend" | "website" | "mobile" | "extension" => {
+            vec![Project, Frontend, Human, Universal]
         }
-    }
-
-    fn slot_count(&self) -> usize {
-        match self {
-            ProjectType::MlModel => 14,       // project (3) + backend (5) + human (6)
-            ProjectType::WebApp => 16,        // project (3) + frontend (3) + universal (4) + human (6)
-            ProjectType::BackendApi => 18,    // project (3) + backend (5) + universal (4) + human (6)
-            ProjectType::Library => 12,       // project (3) + universal (3) + human (6)
-            _ => 12,                          // Default to library slots
+        "mcp" | "backend" | "data-science" => vec![Project, Backend, Human, Universal],
+        "fullstack" | "svelte" | "framework" => {
+            vec![Project, Frontend, Backend, Universal, Human]
         }
+        "monorepo-root" => vec![Project, Human, EntInfra, EntApp, EntOps],
+        "saas" => vec![Project, Frontend, Backend, Universal, Human, EntApp],
+        "mcpaas" => vec![Project, Backend, Universal, Human, EntApp, EntOps],
+        "enterprise" => vec![
+            Project, Frontend, Backend, Universal, Human, EntInfra, EntApp, EntOps,
+        ],
+        // Default to library shape (project + human + universal).
+        _ => vec![Project, Human, Universal],
     }
 }
 
-#[derive(Debug, Default)]
-struct Stack {
-    frontend: Option<String>,
-    css_framework: Option<String>,
-    ui_library: Option<String>,
-    backend: Option<String>,
-    api_type: Option<String>,
-    runtime: Option<String>,
-    database: Option<String>,
-    connection: Option<String>,
-    build: Option<String>,
-    package_manager: Option<String>,
-    hosting: Option<String>,
-    cicd: Option<String>,
-}
+/// The 19 slots that live under the `stack:` section (on-wire key, category).
+/// Order matches slots.ts indices 10-24, 27-30.
+const STACK_SLOTS: &[(&str, Cat)] = &[
+    ("frontend", Cat::Frontend),
+    ("css_framework", Cat::Frontend),
+    ("ui_library", Cat::Frontend),
+    ("state_management", Cat::Frontend),
+    ("backend", Cat::Backend),
+    ("api_type", Cat::Backend),
+    ("runtime", Cat::Backend),
+    ("database", Cat::Backend),
+    ("connection", Cat::Backend),
+    ("hosting", Cat::Universal),
+    ("build", Cat::Universal),
+    ("cicd", Cat::Universal),
+    ("monorepo_tool", Cat::EntInfra),
+    ("package_manager", Cat::EntInfra),
+    ("workspaces", Cat::EntInfra),
+    ("admin", Cat::EntApp),
+    ("cache", Cat::EntApp),
+    ("search", Cat::EntApp),
+    ("storage", Cat::EntApp),
+];
+
+/// The 5 slots that live under the `monorepo:` section (slots.ts 25,26,31,32,33).
+const MONOREPO_SLOTS: &[(&str, Cat)] = &[
+    ("packages_count", Cat::EntInfra),
+    ("build_orchestrator", Cat::EntInfra),
+    ("versioning_strategy", Cat::EntOps),
+    ("shared_configs", Cat::EntOps),
+    ("remote_cache", Cat::EntOps),
+];
 
 #[derive(Debug, Default)]
 struct HumanContext {
@@ -83,34 +104,18 @@ struct HumanContext {
     how: String,
 }
 
-/// Generate project.faf from repository metadata
+/// Generate project.faf (faf-cli v6.8 / faf_version "3.3") from repo metadata.
 ///
 /// # Parameters
 /// - `repo_name`: Repository name (e.g., "grok-1")
 /// - `owner`: Repository owner (e.g., "xai-org")
 /// - `description`: Optional repository description
 /// - `readme`: Optional README.md content
-/// - `dependency_file`: Optional dependency file (package.json, pyproject.toml, etc.)
-/// - `language`: Optional primary language from GitHub API
+/// - `dependency_file`: Optional dependency file (package.json, pyproject.toml, Cargo.toml)
+/// - `language`: Optional primary language from the GitHub API
 ///
 /// # Returns
-/// Generated project.faf YAML content
-///
-/// # Example
-/// ```javascript
-/// import init, { generate_faf } from './faf_generator_wasm.js';
-///
-/// await init();
-///
-/// const faf = generate_faf(
-///     'grok-1',
-///     'xai-org',
-///     'Grok open release',
-///     readmeContent,
-///     pyprojectContent,
-///     'Python'
-/// );
-/// ```
+/// project.faf YAML (no embedded score — faf-cli computes it on read).
 #[wasm_bindgen]
 pub fn generate_faf(
     repo_name: String,
@@ -120,180 +125,202 @@ pub fn generate_faf(
     dependency_file: Option<String>,
     language: Option<String>,
 ) -> Result<String, JsValue> {
-    // Detect project type
-    let project_type = detect_project_type(
+    let app_type = detect_app_type(
         readme.as_deref(),
         dependency_file.as_deref(),
         language.as_deref(),
     );
-
-    // Extract stack information
     let stack = detect_stack(dependency_file.as_deref(), language.as_deref());
-
-    // Extract human context (6 Ws)
-    let human_context = extract_human_context(
+    let human = extract_human_context(
         readme.as_deref(),
         &repo_name,
         &owner,
         description.as_deref(),
     );
+    let version = detect_version(dependency_file.as_deref());
+    let framework = stack.get("frontend").or_else(|| stack.get("backend")).cloned();
+    let primary = primary_stack(&stack, language.as_deref());
 
-    // Calculate filled slots
-    let (filled_slots, total_slots) = calculate_filled_slots(&project_type, &stack, &human_context);
-    let percentage = (filled_slots * 100) / total_slots;
-
-    // Determine primary stack
-    let primary_stack = determine_primary_stack(&stack, language.as_deref());
-
-    // Generate YAML
-    let yaml = generate_yaml(
-        &repo_name,
-        &owner,
-        &project_type,
-        &stack,
-        &human_context,
-        language.as_deref(),
-        &primary_stack,
-        filled_slots,
-        total_slots,
-        percentage,
-    );
-
-    Ok(yaml)
+    Ok(generate_yaml(
+        &repo_name, &owner, &app_type, &stack, &human,
+        language.as_deref(), &primary, version.as_deref(), framework.as_deref(),
+    ))
 }
 
-fn detect_project_type(
+/// Detect the canonical app_type (slots.ts ladder). Highest signal wins.
+fn detect_app_type(
     readme: Option<&str>,
     dependency_file: Option<&str>,
     language: Option<&str>,
-) -> ProjectType {
+) -> String {
     let readme_lower = readme.map(|s| s.to_lowercase()).unwrap_or_default();
-    let dep_file_lower = dependency_file.map(|s| s.to_lowercase()).unwrap_or_default();
+    let dep_lower = dependency_file.map(|s| s.to_lowercase()).unwrap_or_default();
 
-    // Priority 1: ML/AI detection (highest priority)
-    if dep_file_lower.contains("jax") ||
-       dep_file_lower.contains("pytorch") ||
-       dep_file_lower.contains("tensorflow") ||
-       dep_file_lower.contains("torch") ||
-       dep_file_lower.contains("flax") ||
-       dep_file_lower.contains("transformers") ||
-       readme_lower.contains("machine learning") ||
-       readme_lower.contains("deep learning") ||
-       readme_lower.contains("neural network") {
-        return ProjectType::MlModel;
+    // MCP server (rmcp / @modelcontextprotocol / fastmcp)
+    if dep_lower.contains("rmcp")
+        || dep_lower.contains("modelcontextprotocol")
+        || dep_lower.contains("fastmcp")
+        || dep_lower.contains("\"mcp\"")
+    {
+        return "mcp".to_string();
     }
 
-    // Priority 2: Frontend frameworks
-    if dep_file_lower.contains("\"react\"") ||
-       dep_file_lower.contains("\"vue\"") ||
-       dep_file_lower.contains("\"svelte\"") ||
-       dep_file_lower.contains("@angular/core") ||
-       dep_file_lower.contains("\"next\"") {
-        return ProjectType::WebApp;
+    // Data science / ML
+    if dep_lower.contains("jax")
+        || dep_lower.contains("pytorch")
+        || dep_lower.contains("tensorflow")
+        || dep_lower.contains("torch")
+        || dep_lower.contains("flax")
+        || dep_lower.contains("transformers")
+        || readme_lower.contains("machine learning")
+        || readme_lower.contains("deep learning")
+        || readme_lower.contains("neural network")
+    {
+        return "data-science".to_string();
     }
 
-    // Priority 3: Backend frameworks
-    if dep_file_lower.contains("\"express\"") ||
-       dep_file_lower.contains("\"fastapi\"") ||
-       dep_file_lower.contains("\"django\"") ||
-       dep_file_lower.contains("\"flask\"") ||
-       dep_file_lower.contains("\"axum\"") ||
-       dep_file_lower.contains("\"actix\"") {
-        return ProjectType::BackendApi;
+    // Frontend frameworks
+    if dep_lower.contains("\"react\"")
+        || dep_lower.contains("\"vue\"")
+        || dep_lower.contains("\"svelte\"")
+        || dep_lower.contains("@angular/core")
+        || dep_lower.contains("\"next\"")
+    {
+        return "frontend".to_string();
     }
 
-    // Priority 4: CLI tools
-    if dep_file_lower.contains("\"commander\"") ||
-       dep_file_lower.contains("\"yargs\"") ||
-       dep_file_lower.contains("\"clap\"") ||
-       dep_file_lower.contains("\"click\"") ||
-       dep_file_lower.contains("\"argparse\"") ||
-       dep_file_lower.contains("\"typer\"") {
-        return ProjectType::Cli;
+    // Backend frameworks
+    if dep_lower.contains("\"express\"")
+        || dep_lower.contains("\"fastapi\"")
+        || dep_lower.contains("\"django\"")
+        || dep_lower.contains("\"flask\"")
+        || dep_lower.contains("\"axum\"")
+        || dep_lower.contains("\"actix")
+    {
+        return "backend".to_string();
     }
 
-    // Default: library
-    ProjectType::Library
+    // CLI tools
+    if dep_lower.contains("\"commander\"")
+        || dep_lower.contains("\"yargs\"")
+        || dep_lower.contains("\"clap\"")
+        || dep_lower.contains("\"click\"")
+        || dep_lower.contains("\"argparse\"")
+        || dep_lower.contains("\"typer\"")
+    {
+        return "cli".to_string();
+    }
+
+    // SDK by name convention (public dev kit)
+    if let Some(l) = language {
+        if l.eq_ignore_ascii_case("rust") {
+            return "library".to_string();
+        }
+    }
+
+    "library".to_string()
 }
 
-fn detect_stack(dependency_file: Option<&str>, language: Option<&str>) -> Stack {
-    let mut stack = Stack::default();
+/// Detect stack slot values from a dependency file. Keys are on-wire slot names.
+fn detect_stack(dependency_file: Option<&str>, language: Option<&str>) -> HashMap<String, String> {
+    let mut s: HashMap<String, String> = HashMap::new();
+    let dep = match dependency_file {
+        Some(d) => d,
+        None => return s,
+    };
+    let dep_lower = dep.to_lowercase();
 
-    if let Some(dep_content) = dependency_file {
-        let dep_lower = dep_content.to_lowercase();
-
-        // Detect Python stack (pyproject.toml)
-        if dep_content.contains("[tool.poetry]") || dep_content.contains("pyproject.toml") {
-            if dep_content.contains("[tool.poetry]") {
-                stack.package_manager = Some("poetry".to_string());
-                stack.build = Some("poetry".to_string());
-            }
-            stack.runtime = Some("Python".to_string());
-            stack.backend = Some("Python".to_string());
-
-            // Database detection (only if ORM detected)
-            if dep_lower.contains("sqlalchemy") || dep_lower.contains("django.db") {
-                stack.database = Some("SQL".to_string());
-            }
+    // Python (pyproject.toml)
+    if dep.contains("[tool.poetry]") || dep.contains("[project]") && dep_lower.contains("python") {
+        s.insert("runtime".into(), "Python".into());
+        if dep.contains("[tool.poetry]") {
+            s.insert("package_manager".into(), "poetry".into());
+            s.insert("build".into(), "poetry".into());
         }
-
-        // Detect JavaScript/TypeScript stack (package.json)
-        if let Ok(pkg_json) = serde_json::from_str::<Value>(dep_content) {
-            if let Some(deps) = pkg_json.get("dependencies").and_then(|d| d.as_object()) {
-                // Frontend detection
-                if deps.contains_key("react") {
-                    stack.frontend = Some("React".to_string());
-                } else if deps.contains_key("vue") {
-                    stack.frontend = Some("Vue".to_string());
-                } else if deps.contains_key("svelte") {
-                    stack.frontend = Some("Svelte".to_string());
-                } else if deps.contains_key("@angular/core") {
-                    stack.frontend = Some("Angular".to_string());
-                }
-
-                // Backend detection
-                if deps.contains_key("express") {
-                    stack.backend = Some("Express".to_string());
-                    stack.api_type = Some("REST".to_string());
-                } else if deps.contains_key("fastify") {
-                    stack.backend = Some("Fastify".to_string());
-                    stack.api_type = Some("REST".to_string());
-                }
-
-                // Runtime
-                stack.runtime = Some("Node.js".to_string());
-                stack.package_manager = Some("npm".to_string());
-            }
-
-            // Build tool detection
-            if let Some(dev_deps) = pkg_json.get("devDependencies").and_then(|d| d.as_object()) {
-                if dev_deps.contains_key("vite") {
-                    stack.build = Some("Vite".to_string());
-                } else if dev_deps.contains_key("webpack") {
-                    stack.build = Some("Webpack".to_string());
-                }
-            }
+        if dep_lower.contains("fastapi") {
+            s.insert("backend".into(), "FastAPI".into());
+            s.insert("api_type".into(), "REST".into());
+        } else if dep_lower.contains("django") {
+            s.insert("backend".into(), "Django".into());
+        } else if dep_lower.contains("flask") {
+            s.insert("backend".into(), "Flask".into());
         }
+        if dep_lower.contains("sqlalchemy") || dep_lower.contains("django.db") {
+            s.insert("database".into(), "SQL".into());
+        }
+    }
 
-        // Detect Rust stack (Cargo.toml)
-        if dep_content.contains("[package]") && dep_content.contains("cargo") {
-            stack.package_manager = Some("cargo".to_string());
-            stack.runtime = Some("Native".to_string());
-            stack.build = Some("cargo".to_string());
-
-            if dep_lower.contains("wasm-bindgen") {
-                stack.backend = Some("Rust WASM".to_string());
-            } else if dep_lower.contains("axum") {
-                stack.backend = Some("Axum".to_string());
-                stack.api_type = Some("REST".to_string());
-            } else if dep_lower.contains("actix") {
-                stack.backend = Some("Actix".to_string());
-                stack.api_type = Some("REST".to_string());
+    // JS/TS (package.json)
+    if let Ok(pkg) = serde_json::from_str::<Value>(dep) {
+        if let Some(deps) = pkg.get("dependencies").and_then(|d| d.as_object()) {
+            if deps.contains_key("react") {
+                s.insert("frontend".into(), "React".into());
+            } else if deps.contains_key("vue") {
+                s.insert("frontend".into(), "Vue".into());
+            } else if deps.contains_key("svelte") {
+                s.insert("frontend".into(), "Svelte".into());
+            } else if deps.contains_key("@angular/core") {
+                s.insert("frontend".into(), "Angular".into());
+            }
+            if deps.contains_key("tailwindcss") {
+                s.insert("css_framework".into(), "Tailwind".into());
+            }
+            if deps.contains_key("express") {
+                s.insert("backend".into(), "Express".into());
+                s.insert("api_type".into(), "REST".into());
+            } else if deps.contains_key("fastify") {
+                s.insert("backend".into(), "Fastify".into());
+                s.insert("api_type".into(), "REST".into());
+            }
+            s.insert("runtime".into(), "Node.js".into());
+            s.insert("package_manager".into(), "npm".into());
+        }
+        if let Some(dev) = pkg.get("devDependencies").and_then(|d| d.as_object()) {
+            if dev.contains_key("vite") {
+                s.insert("build".into(), "Vite".into());
+            } else if dev.contains_key("webpack") {
+                s.insert("build".into(), "Webpack".into());
             }
         }
     }
 
-    stack
+    // Rust (Cargo.toml)
+    if dep.contains("[package]") && (dep_lower.contains("edition") || dep_lower.contains("cargo")) {
+        s.insert("package_manager".into(), "cargo".into());
+        s.insert("runtime".into(), "Rust".into());
+        s.insert("build".into(), "cargo".into());
+        if dep_lower.contains("wasm-bindgen") || dep_lower.contains("worker") {
+            s.insert("backend".into(), "Rust WASM".into());
+        } else if dep_lower.contains("axum") {
+            s.insert("backend".into(), "Axum".into());
+            s.insert("api_type".into(), "REST".into());
+        } else if dep_lower.contains("actix") {
+            s.insert("backend".into(), "Actix".into());
+            s.insert("api_type".into(), "REST".into());
+        } else if dep_lower.contains("rmcp") {
+            s.insert("backend".into(), "Rust".into());
+            s.insert("api_type".into(), "MCP".into());
+        }
+    }
+
+    let _ = language;
+    s
+}
+
+fn detect_version(dependency_file: Option<&str>) -> Option<String> {
+    let dep = dependency_file?;
+    // version = "x.y.z" (Cargo.toml / pyproject) or "version": "x.y.z" (package.json)
+    if let Ok(re) = Regex::new(r#"(?m)^\s*version\s*[:=]\s*"?([0-9]+\.[0-9]+(?:\.[0-9]+)?)"?"#) {
+        if let Some(c) = re.captures(dep) {
+            return c.get(1).map(|m| m.as_str().to_string());
+        }
+    }
+    if let Ok(re) = Regex::new(r#""version"\s*:\s*"([0-9]+\.[0-9]+(?:\.[0-9]+)?)""#) {
+        if let Some(c) = re.captures(dep) {
+            return c.get(1).map(|m| m.as_str().to_string());
+        }
+    }
+    None
 }
 
 fn extract_human_context(
@@ -302,362 +329,221 @@ fn extract_human_context(
     owner: &str,
     description: Option<&str>,
 ) -> HumanContext {
-    let mut context = HumanContext::default();
-
-    if let Some(readme_content) = readme {
-        // Extract WHO
-        context.who = extract_who(readme_content, owner);
-
-        // Extract WHAT
-        context.what = extract_what(readme_content, repo_name, description);
-
-        // Extract WHY
-        context.why = extract_why(readme_content);
-
-        // Extract WHERE
-        context.where_ = extract_where(readme_content);
-
-        // Extract WHEN
-        context.when = extract_when();
-
-        // Extract HOW
-        context.how = extract_how(readme_content);
-    } else {
-        // Fallback values when no README
-        context.who = format!("{} team", owner);
-        context.what = description.unwrap_or(repo_name).to_string();
-        context.why = "TBD".to_string();
-        context.where_ = "GitHub".to_string();
-        context.when = format!("Initialized {}", Utc::now().format("%Y-%m-%d"));
-        context.how = "TBD".to_string();
+    let mut ctx = HumanContext::default();
+    match readme {
+        Some(r) => {
+            ctx.who = extract_section(r, &["Authors?", "Contributors?", "Team"])
+                .unwrap_or_else(|| format!("{} team", owner));
+            ctx.what = extract_title(r)
+                .or_else(|| description.map(|d| d.to_string()))
+                .unwrap_or_else(|| repo_name.to_string());
+            ctx.why = extract_section(r, &["Purpose", "Why", "Mission", "Goal"])
+                .map(|t| first_sentences(&t, 3))
+                .unwrap_or_default();
+            ctx.where_ = extract_where(r);
+            ctx.when = format!("Initialized {}", Utc::now().format("%Y-%m-%d"));
+            ctx.how = extract_how(r);
+        }
+        None => {
+            ctx.who = format!("{} team", owner);
+            ctx.what = description.unwrap_or(repo_name).to_string();
+            ctx.where_ = "GitHub".to_string();
+            ctx.when = format!("Initialized {}", Utc::now().format("%Y-%m-%d"));
+        }
     }
-
-    context
+    ctx
 }
 
-fn extract_who(readme: &str, owner: &str) -> String {
-    // Look for sections like "## Authors", "## Contributors", "## Team"
-    let patterns = vec![
-        r"##\s*Authors?\s*\n(.*?)\n",
-        r"##\s*Contributors?\s*\n(.*?)\n",
-        r"##\s*Team\s*\n(.*?)\n",
-    ];
-
-    for pattern in patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            if let Some(cap) = re.captures(readme) {
-                if let Some(match_text) = cap.get(1) {
-                    let text = match_text.as_str().trim();
-                    if !text.is_empty() {
-                        return text.to_string();
+fn extract_section(readme: &str, headings: &[&str]) -> Option<String> {
+    for h in headings {
+        let pat = format!(r"(?is)##\s*{}\s*\n(.*?)(?:\n##|\z)", h);
+        if let Ok(re) = Regex::new(&pat) {
+            if let Some(c) = re.captures(readme) {
+                if let Some(m) = c.get(1) {
+                    let t = m.as_str().trim();
+                    if !t.is_empty() {
+                        return Some(t.to_string());
                     }
                 }
             }
         }
     }
-
-    format!("{} team", owner)
+    None
 }
 
-fn extract_what(readme: &str, repo_name: &str, description: Option<&str>) -> String {
-    // Extract first # heading (title)
-    if let Ok(re) = Regex::new(r"#\s+(.+)") {
-        if let Some(cap) = re.captures(readme) {
-            if let Some(match_text) = cap.get(1) {
-                return match_text.as_str().trim().to_string();
-            }
-        }
-    }
-
-    // Fallback to description or repo name
-    description.unwrap_or(repo_name).to_string()
-}
-
-fn extract_why(readme: &str) -> String {
-    // Look for sections like "## Purpose", "## Why", "## Mission", "## Goal"
-    let patterns = vec![
-        r"##\s*Purpose\s*\n(.*?)(?:\n##|\z)",
-        r"##\s*Why\s*\n(.*?)(?:\n##|\z)",
-        r"##\s*Mission\s*\n(.*?)(?:\n##|\z)",
-        r"##\s*Goal\s*\n(.*?)(?:\n##|\z)",
-    ];
-
-    for pattern in patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            if let Some(cap) = re.captures(readme) {
-                if let Some(match_text) = cap.get(1) {
-                    let text = match_text.as_str().trim();
-                    if !text.is_empty() {
-                        // Extract first 1-3 sentences
-                        return extract_first_sentences(text, 3);
-                    }
-                }
-            }
-        }
-    }
-
-    "TBD".to_string()
+fn extract_title(readme: &str) -> Option<String> {
+    Regex::new(r"(?m)^#\s+(.+)$")
+        .ok()
+        .and_then(|re| re.captures(readme))
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
 }
 
 fn extract_where(readme: &str) -> String {
-    // Check for deployment mentions
-    let deployments = vec!["Vercel", "AWS", "Heroku", "Netlify", "Cloudflare"];
-
-    for deployment in deployments {
-        if readme.contains(deployment) {
-            return deployment.to_string();
+    for d in &["Vercel", "AWS", "Heroku", "Netlify", "Cloudflare", "Docker", "Fly.io"] {
+        if readme.contains(d) {
+            return d.to_string();
         }
     }
-
     "GitHub".to_string()
 }
 
-fn extract_when() -> String {
-    format!("Initialized {}", Utc::now().format("%Y-%m-%d"))
-}
-
 fn extract_how(readme: &str) -> String {
-    // Check for sections like "## Installation", "## Getting Started", "## Usage"
-    let sections = vec![
-        ("Installation", r"##\s*Installation"),
-        ("Getting Started", r"##\s*Getting Started"),
-        ("Usage", r"##\s*Usage"),
-    ];
-
-    for (name, pattern) in sections {
-        if let Ok(re) = Regex::new(pattern) {
-            if re.is_match(readme) {
-                return format!("See README: {}", name);
-            }
+    for (name, pat) in &[
+        ("Installation", r"(?i)##\s*Installation"),
+        ("Getting Started", r"(?i)##\s*Getting Started"),
+        ("Usage", r"(?i)##\s*Usage"),
+    ] {
+        if Regex::new(pat).map(|re| re.is_match(readme)).unwrap_or(false) {
+            return format!("See README: {}", name);
         }
     }
-
-    "TBD".to_string()
+    String::new()
 }
 
-fn extract_first_sentences(text: &str, max_count: usize) -> String {
-    let sentences: Vec<&str> = text
-        .split('.')
-        .take(max_count)
-        .collect();
-
-    sentences.join(".").trim().to_string()
+fn first_sentences(text: &str, max: usize) -> String {
+    text.split('.').take(max).collect::<Vec<_>>().join(".").trim().to_string()
 }
 
-fn calculate_filled_slots(project_type: &ProjectType, stack: &Stack, human_context: &HumanContext) -> (usize, usize) {
-    let total_slots = project_type.slot_count();
-    let mut filled = 3; // Project slots always filled (name, goal, main_language)
-
-    // Count stack slots
-    if stack.frontend.is_some() { filled += 1; }
-    if stack.css_framework.is_some() { filled += 1; }
-    if stack.ui_library.is_some() { filled += 1; }
-    if stack.backend.is_some() { filled += 1; }
-    if stack.api_type.is_some() { filled += 1; }
-    if stack.runtime.is_some() { filled += 1; }
-    if stack.database.is_some() { filled += 1; }
-    if stack.connection.is_some() { filled += 1; }
-    if stack.build.is_some() { filled += 1; }
-    if stack.package_manager.is_some() { filled += 1; }
-    if stack.hosting.is_some() { filled += 1; }
-    if stack.cicd.is_some() { filled += 1; }
-
-    // Count human context slots (6 Ws)
-    if !human_context.who.is_empty() && human_context.who != "TBD" { filled += 1; }
-    if !human_context.what.is_empty() && human_context.what != "TBD" { filled += 1; }
-    if !human_context.why.is_empty() && human_context.why != "TBD" { filled += 1; }
-    if !human_context.where_.is_empty() && human_context.where_ != "TBD" { filled += 1; }
-    if !human_context.when.is_empty() && human_context.when != "TBD" { filled += 1; }
-    if !human_context.how.is_empty() && human_context.how != "TBD" { filled += 1; }
-
-    (filled, total_slots)
+fn primary_stack(stack: &HashMap<String, String>, language: Option<&str>) -> String {
+    stack
+        .get("frontend")
+        .or_else(|| stack.get("backend"))
+        .or_else(|| stack.get("runtime"))
+        .cloned()
+        .or_else(|| language.map(|l| l.to_string()))
+        .unwrap_or_default()
 }
 
-fn determine_primary_stack(stack: &Stack, language: Option<&str>) -> String {
-    if let Some(frontend) = &stack.frontend {
-        return frontend.clone();
+/// Render a YAML-safe scalar. Double-quotes any value that would otherwise be
+/// mis-parsed — notably `: ` (colon-space reads as a nested mapping), leading
+/// indicator chars, or trailing space. Bare colons (e.g. ISO timestamps) are
+/// left unquoted to match faf-cli's canonical style.
+fn yaml_scalar(v: &str) -> String {
+    let needs_quote = v.contains(": ")
+        || v.contains(" #")
+        || v.contains('\n')
+        || v.ends_with(':')
+        || v.ends_with(' ')
+        || v.starts_with(|c: char| "-?:,[]{}#&*!|>'\"%@` ".contains(c));
+    if needs_quote {
+        format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        v.to_string()
     }
-    if let Some(backend) = &stack.backend {
-        return backend.clone();
-    }
-    if let Some(runtime) = &stack.runtime {
-        return runtime.clone();
-    }
-    language.unwrap_or("Unknown").to_string()
 }
 
+/// `key: value` line (2-space indent). Empty value → bare `key:` (YAML null,
+/// scores as empty), no trailing space.
+fn kv(key: &str, value: &str) -> String {
+    if value.is_empty() {
+        format!("  {}:\n", key)
+    } else {
+        format!("  {}: {}\n", key, yaml_scalar(value))
+    }
+}
+
+/// Emit a single slot line: detected value, empty (active+undetected), or `slotignored`.
+fn slot_line(yaml: &mut String, key: &str, cat: Cat, active: &[Cat], stack: &HashMap<String, String>) {
+    if active.contains(&cat) {
+        match stack.get(key) {
+            Some(v) => yaml.push_str(&kv(key, v)),
+            None => yaml.push_str(&format!("  {}:\n", key)), // active but undetected → empty
+        }
+    } else {
+        yaml.push_str(&format!("  {}: slotignored\n", key));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn generate_yaml(
     repo_name: &str,
     owner: &str,
-    project_type: &ProjectType,
-    stack: &Stack,
-    human_context: &HumanContext,
+    app_type: &str,
+    stack: &HashMap<String, String>,
+    human: &HumanContext,
     language: Option<&str>,
-    primary_stack: &str,
-    filled_slots: usize,
-    total_slots: usize,
-    percentage: usize,
+    primary: &str,
+    version: Option<&str>,
+    framework: Option<&str>,
 ) -> String {
-    let timestamp = Utc::now().to_rfc3339();
-    let repo_upper = repo_name.to_uppercase().replace("-", "");
-    let birth_cert = format!("FAF-2025-{}-INIT", &repo_upper[..std::cmp::min(8, repo_upper.len())]);
-
-    let mut yaml = String::new();
+    let active = active_cats(app_type);
+    let lang = language.unwrap_or("");
+    let mut y = String::new();
 
     // Header
-    yaml.push_str("faf_version: 2.5.0\n");
-    yaml.push_str(&format!("generated: {}\n", timestamp));
-    yaml.push_str("ai_scoring_system: 2025-12-17\n");
-    yaml.push_str(&format!("ai_score: {}%\n", percentage));
-    yaml.push_str("ai_confidence: MODERATE\n");
-    yaml.push_str("ai_value: 30_seconds_replaces_20_minutes_of_questions\n\n");
+    y.push_str("faf_version: \"3.3\"\n");
 
-    // AI TL;DR
-    yaml.push_str("ai_tldr:\n");
-    yaml.push_str(&format!("  project: {}\n", repo_name));
-    yaml.push_str(&format!("  stack: {}\n", primary_stack));
-    yaml.push_str("  quality_bar: PRODUCTION\n");
-    yaml.push_str("  current_focus: Initial setup\n");
-    yaml.push_str("  your_role: Build with AI assistance\n\n");
-
-    // Instant Context
-    yaml.push_str("instant_context:\n");
-    yaml.push_str(&format!("  what_building: {}\n", human_context.what));
-    yaml.push_str(&format!("  tech_stack: {}\n", primary_stack));
-    yaml.push_str(&format!("  main_language: {}\n", language.unwrap_or("Unknown")));
-    yaml.push_str(&format!("  deployment: {}\n", human_context.where_));
-    yaml.push_str("  key_files: []\n\n");
-
-    // Context Quality
-    yaml.push_str("context_quality:\n");
-    yaml.push_str(&format!("  slots_filled: {}/{} ({}%)\n", filled_slots, total_slots, percentage));
-    yaml.push_str("  ai_confidence: MODERATE\n");
-    yaml.push_str(&format!("  handoff_ready: {}\n", if percentage >= 85 { "true" } else { "false" }));
-    yaml.push_str("  missing_context:\n");
-    // TODO: List missing fields
-    yaml.push_str("    - Additional context needed\n\n");
-
-    // Project
-    yaml.push_str("project:\n");
-    yaml.push_str(&format!("  name: {}\n", repo_name));
-    yaml.push_str(&format!("  goal: {}\n", human_context.what));
-    yaml.push_str(&format!("  main_language: {}\n", language.unwrap_or("Unknown")));
-    yaml.push_str(&format!("  type: {}\n", project_type.as_str()));
-    yaml.push_str("  version: 1.0.0\n");
-    yaml.push_str(&format!("  generated: {}\n", timestamp));
-    yaml.push_str(&format!("  repository: https://github.com/{}/{}\n\n", owner, repo_name));
-
-    // AI Instructions
-    yaml.push_str("ai_instructions:\n");
-    yaml.push_str("  priority_order:\n");
-    yaml.push_str("    - 1. Read THIS .faf file first\n");
-    yaml.push_str("    - 2. Check README.md for overview\n");
-    yaml.push_str("    - 3. Review key files\n");
-    yaml.push_str("  working_style:\n");
-    yaml.push_str("    code_first: true\n");
-    yaml.push_str("    explanations: clear\n");
-    yaml.push_str("    quality_bar: production\n");
-    yaml.push_str("    testing: recommended\n");
-    yaml.push_str("  warnings:\n");
-    yaml.push_str("    - Follow existing code patterns\n");
-    yaml.push_str("    - Test before committing\n\n");
-
-    // Stack (only include detected fields)
-    yaml.push_str("stack:\n");
-    if let Some(frontend) = &stack.frontend {
-        yaml.push_str(&format!("  frontend: {}\n", frontend));
+    // project
+    y.push_str("project:\n");
+    y.push_str(&kv("name", repo_name));
+    y.push_str(&kv("goal", &human.what));
+    y.push_str(&kv("main_language", lang));
+    y.push_str(&kv("type", app_type));
+    if let Some(v) = version {
+        y.push_str(&kv("version", v));
     }
-    if let Some(css) = &stack.css_framework {
-        yaml.push_str(&format!("  css_framework: {}\n", css));
+    if let Some(f) = framework {
+        y.push_str(&kv("framework", f));
     }
-    if let Some(ui) = &stack.ui_library {
-        yaml.push_str(&format!("  ui_library: {}\n", ui));
-    }
-    if let Some(backend) = &stack.backend {
-        yaml.push_str(&format!("  backend: {}\n", backend));
-    }
-    if let Some(api) = &stack.api_type {
-        yaml.push_str(&format!("  api_type: {}\n", api));
-    }
-    if let Some(runtime) = &stack.runtime {
-        yaml.push_str(&format!("  runtime: {}\n", runtime));
-    }
-    if let Some(db) = &stack.database {
-        yaml.push_str(&format!("  database: {}\n", db));
-    }
-    if let Some(conn) = &stack.connection {
-        yaml.push_str(&format!("  connection: {}\n", conn));
-    }
-    if let Some(build) = &stack.build {
-        yaml.push_str(&format!("  build: {}\n", build));
-    }
-    if let Some(pkg_mgr) = &stack.package_manager {
-        yaml.push_str(&format!("  package_manager: {}\n", pkg_mgr));
-    }
-    if let Some(hosting) = &stack.hosting {
-        yaml.push_str(&format!("  hosting: {}\n", hosting));
-    }
-    if let Some(cicd) = &stack.cicd {
-        yaml.push_str(&format!("  cicd: {}\n", cicd));
-    }
-    yaml.push_str("\n");
 
-    // Preferences
-    yaml.push_str("preferences:\n");
-    yaml.push_str("  quality_bar: production\n");
-    yaml.push_str("  commit_style: conventional\n");
-    yaml.push_str("  response_style: balanced\n");
-    yaml.push_str("  explanation_level: clear\n");
-    yaml.push_str("  communication: friendly\n");
-    yaml.push_str("  testing: recommended\n\n");
+    // instant_context
+    y.push_str("instant_context:\n");
+    y.push_str(&kv("what_building", &human.what));
+    y.push_str(&kv("tech_stack", if primary.is_empty() { lang } else { primary }));
+    y.push_str("  key_files: []\n");
 
-    // State
-    yaml.push_str("state:\n");
-    yaml.push_str("  phase: active\n");
-    yaml.push_str("  version: 1.0.0\n");
-    yaml.push_str("  focus: development\n");
-    yaml.push_str("  status: ready\n");
-    yaml.push_str("  next_milestone: Define roadmap\n");
-    yaml.push_str("  blockers: null\n\n");
+    // stack (19 slots)
+    y.push_str("stack:\n");
+    for (key, cat) in STACK_SLOTS {
+        slot_line(&mut y, key, *cat, &active, stack);
+    }
 
-    // Tags
-    yaml.push_str("tags:\n");
-    yaml.push_str(&format!("  - {}\n", repo_name));
-    yaml.push_str(&format!("  - {}\n", primary_stack));
-    yaml.push_str("  - faf\n");
-    yaml.push_str("  - ai-ready\n\n");
+    // human_context (6 slots)
+    y.push_str("human_context:\n");
+    y.push_str(&kv("who", &human.who));
+    y.push_str(&kv("what", &human.what));
+    y.push_str(&kv("why", &human.why));
+    y.push_str(&kv("where", &human.where_));
+    y.push_str(&kv("when", &human.when));
+    y.push_str(&kv("how", &human.how));
 
-    // Human Context
-    yaml.push_str("human_context:\n");
-    yaml.push_str(&format!("  who: {}\n", human_context.who));
-    yaml.push_str(&format!("  what: {}\n", human_context.what));
-    yaml.push_str(&format!("  why: {}\n", human_context.why));
-    yaml.push_str(&format!("  where: {}\n", human_context.where_));
-    yaml.push_str(&format!("  when: {}\n", human_context.when));
-    yaml.push_str(&format!("  how: {}\n", human_context.how));
-    yaml.push_str("  additional_context: Generated by builder.faf.one\n");
-    yaml.push_str(&format!("  context_score: {}\n", percentage));
-    yaml.push_str(&format!("  total_prd_score: {}\n", percentage));
-    yaml.push_str(&format!("  success_rate: {}%\n\n", percentage));
+    // tags
+    y.push_str("tags:\n");
+    y.push_str(&format!("  - {}\n", yaml_scalar(repo_name)));
+    y.push_str(&format!("  - {}\n", yaml_scalar(app_type)));
+    if !lang.is_empty() {
+        y.push_str(&format!("  - {}\n", yaml_scalar(&lang.to_lowercase())));
+    }
+    y.push_str("  - faf\n");
+    y.push_str("  - ai-context\n");
 
-    // AI Scoring Details
-    yaml.push_str("ai_scoring_details:\n");
-    yaml.push_str("  system_date: 2025-12-17\n");
-    yaml.push_str(&format!("  slot_based_percentage: {}\n", percentage));
-    yaml.push_str(&format!("  ai_score: {}\n", percentage));
-    yaml.push_str(&format!("  total_slots: {}\n", total_slots));
-    yaml.push_str(&format!("  filled_slots: {}\n", filled_slots));
-    yaml.push_str("  scoring_method: Honest percentage - no fake minimums\n");
-    yaml.push_str("  trust_embedded: COUNT ONCE architecture\n\n");
+    // state
+    y.push_str("state:\n");
+    y.push_str("  phase: active\n");
+    y.push_str(&kv("version", version.unwrap_or("1.0.0")));
 
-    // FAF DNA
-    yaml.push_str("faf_dna:\n");
-    yaml.push_str(&format!("  birth_dna: {}\n", percentage));
-    yaml.push_str(&format!("  birth_certificate: {}\n", birth_cert));
-    yaml.push_str(&format!("  birth_date: {}\n", timestamp));
-    yaml.push_str(&format!("  current_score: {}\n", percentage));
+    // metadata (generation attribution)
+    y.push_str("metadata:\n");
+    y.push_str("  generated_by: builder.faf.one\n");
+    y.push_str(&kv("generated", &Utc::now().to_rfc3339()));
+    y.push_str(&kv("repository", &format!("https://github.com/{}/{}", owner, repo_name)));
 
-    yaml
+    // monorepo (5 slots)
+    y.push_str("monorepo:\n");
+    for (key, cat) in MONOREPO_SLOTS {
+        // monorepo slots use the same key but live under monorepo:
+        if active.contains(cat) {
+            match stack.get(*key) {
+                Some(v) => y.push_str(&format!("  {}: {}\n", key, v)),
+                None => y.push_str(&format!("  {}:\n", key)),
+            }
+        } else {
+            y.push_str(&format!("  {}: slotignored\n", key));
+        }
+    }
+
+    y
 }
 
 #[cfg(test)]
@@ -665,62 +551,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ml_research_type_detection() {
-        let pyproject = r#"
-[tool.poetry]
-name = "grok-1"
-
-[tool.poetry.dependencies]
-jax = "^0.4.0"
-flax = "^0.7.0"
-"#;
-
-        let readme = "# Grok-1\n\nA machine learning model.";
-
-        let project_type = detect_project_type(Some(readme), Some(pyproject), Some("Python"));
-        assert_eq!(project_type.as_str(), "ml-research");
+    fn emits_faf_version_3_3() {
+        let y = generate_faf(
+            "demo".into(), "owner".into(), None, None, None, Some("Rust".into()),
+        )
+        .unwrap();
+        assert!(y.contains("faf_version: \"3.3\""), "must emit current faf_version");
     }
 
     #[test]
-    fn test_web_app_detection() {
-        let package_json = r#"{
-  "dependencies": {
-    "react": "^18.0.0"
-  }
-}"#;
-
-        let project_type = detect_project_type(None, Some(package_json), Some("JavaScript"));
-        assert_eq!(project_type.as_str(), "web-app");
+    fn no_obsolete_sections() {
+        let y = generate_faf(
+            "demo".into(), "owner".into(), None, None, None, Some("Rust".into()),
+        )
+        .unwrap();
+        for dead in ["ai_tldr", "faf_dna", "ai_scoring_details", "ai_score", "context_quality"] {
+            assert!(!y.contains(dead), "v6.8 dropped section `{}` must not appear", dead);
+        }
     }
 
     #[test]
-    fn test_stack_detection_python() {
-        let pyproject = r#"
-[tool.poetry]
-name = "test"
-
-[tool.poetry.dependencies]
-python = "^3.8"
-"#;
-
-        let stack = detect_stack(Some(pyproject), Some("Python"));
-        assert_eq!(stack.package_manager, Some("poetry".to_string()));
-        assert_eq!(stack.runtime, Some("Python".to_string()));
+    fn mcp_type_detected_from_rmcp() {
+        let cargo = "[package]\nname=\"x\"\nedition=\"2021\"\n[dependencies]\nrmcp=\"1.1\"";
+        let t = detect_app_type(None, Some(cargo), Some("Rust"));
+        assert_eq!(t, "mcp");
     }
 
     #[test]
-    fn test_no_unknown_hardcoding() {
-        let result = generate_faf(
-            "test-repo".to_string(),
-            "test-owner".to_string(),
-            None,
-            None,
-            None,
-            Some("Rust".to_string()),
-        );
+    fn data_science_type_detected() {
+        let py = "[tool.poetry]\nname=\"grok\"\n[tool.poetry.dependencies]\njax=\"^0.4\"";
+        let t = detect_app_type(Some("# Grok\nmachine learning model"), Some(py), Some("Python"));
+        assert_eq!(t, "data-science");
+    }
 
-        assert!(result.is_ok());
-        let yaml = result.unwrap();
-        assert!(!yaml.contains("Unknown"), "Should not contain 'Unknown' hardcoding");
+    #[test]
+    fn frontend_categories_slotignored_for_mcp() {
+        // mcp = project+backend+human+universal → frontend slots are slotignored
+        let cargo = "[package]\nname=\"x\"\nedition=\"2021\"\n[dependencies]\nrmcp=\"1.1\"";
+        let y = generate_faf(
+            "srv".into(), "me".into(), None, None, Some(cargo.into()), Some("Rust".into()),
+        )
+        .unwrap();
+        assert!(y.contains("frontend: slotignored"), "frontend inactive for mcp");
+        assert!(y.contains("css_framework: slotignored"));
+        // backend IS active → backend slot must NOT be slotignored
+        assert!(!y.contains("backend: slotignored"), "backend active for mcp");
+    }
+
+    #[test]
+    fn all_33_slots_present() {
+        let y = generate_faf(
+            "x".into(), "o".into(), None, None, None, Some("Rust".into()),
+        )
+        .unwrap();
+        // 19 stack + 5 monorepo slot keys must all appear
+        for (k, _) in STACK_SLOTS.iter().chain(MONOREPO_SLOTS.iter()) {
+            assert!(y.contains(&format!("{}:", k)), "missing slot `{}`", k);
+        }
+        // + project(3) + human(6)
+        for k in ["name", "goal", "main_language", "who", "what", "why", "where", "when", "how"] {
+            assert!(y.contains(&format!("{}:", k)), "missing field `{}`", k);
+        }
+    }
+
+    #[test]
+    fn enterprise_slots_slotignored_for_library() {
+        let y = generate_faf(
+            "lib".into(), "o".into(), None, None, None, Some("Rust".into()),
+        )
+        .unwrap();
+        // library = project+human+universal → enterprise_app/ops slotignored
+        assert!(y.contains("admin: slotignored"));
+        assert!(y.contains("remote_cache: slotignored"));
     }
 }
