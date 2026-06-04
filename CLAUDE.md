@@ -10,7 +10,9 @@ Generate `project.faf` files in the browser or at the edge.
 ## Stack
 
 - **Language:** Rust
+- **Hosting:** npm
 - **Build:** cargo
+- **Cicd:** GitHub Actions
 
 ## Context
 
@@ -23,4 +25,4 @@ Generate `project.faf` files in the browser or at the edge.
 
 ---
 
-*STATUS: BI-SYNC ACTIVE — 2026-06-03T23:43:35.280Z*
+*STATUS: BI-SYNC ACTIVE — 2026-06-04T05:19:23.690Z*

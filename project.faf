@@ -14,9 +14,9 @@ stack:
   runtime: slotignored
   database: slotignored
   connection: slotignored
-  hosting: ""
+  hosting: npm
   build: cargo
-  cicd: ""
+  cicd: GitHub Actions
   monorepo_tool: slotignored
   package_manager: slotignored
   workspaces: slotignored
