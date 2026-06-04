@@ -27,8 +27,8 @@ codegen-units = 1   # Reduce number of codegen units to increase optimizations
 strip = true        # Strip symbols from binary
 
 [package.metadata.wasm-pack.profile.release]
-# wasm-opt disabled: the system wasm-opt (Homebrew) can't process this crate's
-# wasm (chrono+regex+serde_json pull in newer wasm features it rejects).
-# Rust-level opt (opt-level="z" + lto + strip, above) still applies.
-# Re-enable with a newer wasm-opt to shave further size.
-wasm-opt = false
+# wasm-opt needs the wasm features this crate uses ENABLED explicitly — the
+# default wasm-pack invocation omits them, which is why -Os/-Oz failed before
+# (it was the flags, not the binaryen version). With them on, -Oz works:
+# 969 KB → ~899 KB (deps dominate, so this is roughly the ceiling).
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-reference-types", "--enable-sign-ext", "--enable-mutable-globals", "--enable-nontrapping-float-to-int"]
