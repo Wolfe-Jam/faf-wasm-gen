@@ -4,6 +4,12 @@
 
 Generate `project.faf` files in the browser or at the edge.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-WASM-orange)](https://www.rust-lang.org/)
+[![project.faf](https://img.shields.io/badge/project.faf-inside-008B8B)](https://github.com/Wolfe-Jam/faf)
+
+⭐ Bookmarks it for you, helps other devs find it too.
+
 ---
 
 ## Mission
@@ -138,7 +144,7 @@ cargo test
 **Implementation:** Complete ✅ (730 lines Rust)
 **Tests:** 7/7 passing ✅ (4 unit + 3 integration)
 **WASM Build:** Optimized ✅ (1.04MB final, 11.9% reduction from 1.19MB)
-**Grok-1 Test:** 85% 🥉 Bronze (handoff_ready: true)
+**Grok-1 Test:** 85% ◇ Bronze (handoff_ready: true)
 **Owner:** wolfejam
 **Date:** 2026-02-07
 
