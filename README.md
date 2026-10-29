@@ -8,7 +8,7 @@ Generate `project.faf` files in the browser or at the edge.
 [![Rust](https://img.shields.io/badge/Rust-WASM-orange)](https://www.rust-lang.org/)
 [![project.faf](https://img.shields.io/badge/project.faf-inside-008B8B)](https://github.com/Wolfe-Jam/faf)
 
-⭐ Bookmarks it for you, helps other devs find it too.
+⭐ [Star it on GitHub](https://github.com/Wolfe-Jam/faf-wasm-gen): bookmarks it for you, helps other devs find it too.
 
 ---
 
